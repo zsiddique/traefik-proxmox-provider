@@ -2,6 +2,7 @@ package proxmox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -25,12 +26,19 @@ func (n *Node) Version(ctx context.Context) (version *Version, err error) {
 	return version, n.client.Get(ctx, fmt.Sprintf("/nodes/%s/version", n.Name), &version)
 }
 
-func (n *Node) TermProxy(ctx context.Context) (vnc *VNC, err error) {
-	return vnc, n.client.Post(ctx, fmt.Sprintf("/nodes/%s/termproxy", n.Name), nil, &vnc)
+func (n *Node) TermProxy(ctx context.Context) (term *Term, err error) {
+	return term, n.client.Post(ctx, fmt.Sprintf("/nodes/%s/termproxy", n.Name), nil, &term)
+}
+
+func (n *Node) TermWebSocket(term *Term) (chan []byte, chan []byte, chan error, func() error, error) {
+	p := fmt.Sprintf("/nodes/%s/vncwebsocket?port=%d&vncticket=%s",
+		n.Name, term.Port, url.QueryEscape(term.Ticket))
+
+	return n.client.TermWebSocket(p, term)
 }
 
 // VNCWebSocket send, recv, errors, closer, error
-func (n *Node) VNCWebSocket(vnc *VNC) (chan string, chan string, chan error, func() error, error) {
+func (n *Node) VNCWebSocket(vnc *VNC) (chan []byte, chan []byte, chan error, func() error, error) {
 	p := fmt.Sprintf("/nodes/%s/vncwebsocket?port=%d&vncticket=%s",
 		n.Name, vnc.Port, url.QueryEscape(vnc.Ticket))
 
@@ -94,14 +102,20 @@ func (n *Node) Containers(ctx context.Context) (c Containers, err error) {
 }
 
 func (n *Node) Container(ctx context.Context, vmid int) (*Container, error) {
-	var c Container
+	c := &Container{
+		client: n.client,
+		Node:   n.Name,
+	}
+
 	if err := n.client.Get(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/status/current", n.Name, vmid), &c); err != nil {
 		return nil, err
 	}
-	c.client = n.client
-	c.Node = n.Name
 
-	return &c, nil
+	if err := n.client.Get(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/config", n.Name, vmid), &c.ContainerConfig); err != nil {
+		return nil, err
+	}
+
+	return c, nil
 }
 
 func (n *Node) NewContainer(ctx context.Context, vmid int, options ...ContainerOption) (*Task, error) {
@@ -275,4 +289,54 @@ func (n *Node) DeleteCustomCertificate(ctx context.Context) error {
 func (n *Node) GetCustomCertificates(ctx context.Context) (certs *NodeCertificates, err error) {
 	err = n.client.Get(ctx, fmt.Sprintf("/nodes/%s/certificates/info", n.Name), &certs)
 	return
+}
+
+func (n *Node) Vzdump(ctx context.Context, params *VirtualMachineBackupOptions) (task *Task, err error) {
+	var upid UPID
+
+	if params == nil {
+		params = &VirtualMachineBackupOptions{}
+	}
+
+	if err = n.client.Post(ctx, fmt.Sprintf("/nodes/%s/vzdump", n.Name), params, &upid); err != nil {
+		return nil, err
+	}
+	return NewTask(upid, n.client), nil
+}
+
+func (n *Node) VzdumpExtractConfig(ctx context.Context, volume string) (*VzdumpConfig, error) {
+	var vzdumpExtractedConfig string
+
+	if err := n.client.Get(ctx, fmt.Sprintf("/nodes/%s/vzdump/extractconfig?volume=%s", n.Name, volume), &vzdumpExtractedConfig); err != nil {
+		return nil, err
+	}
+
+	return n.parseVzdumpConfig(vzdumpExtractedConfig)
+}
+
+func (n *Node) parseVzdumpConfig(vzdumpExtractedConfig string) (*VzdumpConfig, error) {
+	vzdumpFields := strings.Split(vzdumpExtractedConfig, StringSeparator)
+
+	configFields := make(map[string]any)
+
+	for _, field := range vzdumpFields {
+		if field != "" {
+			newStr := strings.SplitN(field, FieldSeparator, 2)
+			if len(newStr) == 2 {
+				configFields[newStr[0]] = strings.Trim(newStr[1], SpaceSeparator)
+			}
+		}
+	}
+
+	jsonData, err := json.Marshal(configFields)
+	if err != nil {
+		return nil, fmt.Errorf("cannot present vzdump config as json string : %w", err)
+	}
+
+	vzdumpCfg := &VzdumpConfig{}
+	if err := json.Unmarshal(jsonData, vzdumpCfg); err != nil {
+		return nil, fmt.Errorf("cannot parse data for vzdump config : %w", err)
+	}
+
+	return vzdumpCfg, nil
 }

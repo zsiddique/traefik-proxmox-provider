@@ -15,7 +15,7 @@ func (vmc *VirtualMachineConfig) mergeIndexedDevices(prefix string) map[string]s
 	for i := 0; i < count; i++ {
 		fn := t.Field(i).Name
 		fv := v.Field(i).String()
-		if "" == fv {
+		if fv == "" {
 			continue
 		}
 		if strings.HasPrefix(fn, prefix) {
@@ -113,4 +113,25 @@ func (vmc *VirtualMachineConfig) MergeIPConfigs() map[string]string {
 		vmc.IPConfigs = vmc.mergeIndexedDevices("IPConfig")
 	}
 	return vmc.IPConfigs
+}
+
+func (vmc *VirtualMachineConfig) MergeDisks() map[string]string {
+	mergedDisks := make(map[string]string)
+
+	for k, v := range vmc.MergeIDEs() {
+		mergedDisks[k] = v
+	}
+
+	for k, v := range vmc.MergeSCSIs() {
+		mergedDisks[k] = v
+	}
+
+	for k, v := range vmc.MergeSATAs() {
+		mergedDisks[k] = v
+	}
+
+	for k, v := range vmc.MergeVirtIOs() {
+		mergedDisks[k] = v
+	}
+	return mergedDisks
 }

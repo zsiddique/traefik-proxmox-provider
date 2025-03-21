@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 func (c *Container) Clone(ctx context.Context, params *ContainerCloneOptions) (newid int, task *Task, err error) {
@@ -17,11 +18,13 @@ func (c *Container) Clone(ctx context.Context, params *ContainerCloneOptions) (n
 		if err != nil {
 			return newid, nil, err
 		}
-		newid, err := cluster.NextID(ctx)
+		newid, err = cluster.NextID(ctx)
 		if err != nil {
 			return newid, nil, err
 		}
 		params.NewID = newid
+	} else {
+		newid = params.NewID
 	}
 	if err := c.client.Post(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/clone", c.Node, c.VMID), params, &upid); err != nil {
 		return 0, nil, err
@@ -38,6 +41,8 @@ func (c *Container) Delete(ctx context.Context) (task *Task, err error) {
 	return NewTask(upid, c.client), nil
 }
 
+// Config sets ContainerOptions for Container
+// see https://pve.proxmox.com/pve-docs/api-viewer/index.html#/nodes/{node}/lxc/{vmid}/config for available attributes
 func (c *Container) Config(ctx context.Context, options ...ContainerOption) (*Task, error) {
 	var upid UPID
 	data := make(map[string]interface{})
@@ -96,11 +101,18 @@ func (c *Container) Shutdown(ctx context.Context, force bool, timeout int) (task
 	return NewTask(upid, c.client), nil
 }
 
-func (c *Container) TermProxy(ctx context.Context) (vnc *VNC, err error) {
-	return vnc, c.client.Post(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/termproxy", c.Node, c.VMID), nil, &vnc)
+func (c *Container) TermProxy(ctx context.Context) (term *Term, err error) {
+	return term, c.client.Post(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/termproxy", c.Node, c.VMID), nil, &term)
 }
 
-func (c *Container) VNCWebSocket(vnc *VNC) (chan string, chan string, chan error, func() error, error) {
+func (c *Container) TermWebSocket(term *Term) (chan []byte, chan []byte, chan error, func() error, error) {
+	p := fmt.Sprintf("/nodes/%s/lxc/%d/vncwebsocket?port=%d&vncticket=%s",
+		c.Node, c.VMID, term.Port, url.QueryEscape(term.Ticket))
+
+	return c.client.TermWebSocket(p, term)
+}
+
+func (c *Container) VNCWebSocket(vnc *VNC) (chan []byte, chan []byte, chan error, func() error, error) {
 	p := fmt.Sprintf("/nodes/%s/lxc/%d/vncwebsocket?port=%d&vncticket=%s",
 		c.Node, c.VMID, vnc.Port, url.QueryEscape(vnc.Ticket))
 
@@ -115,12 +127,10 @@ func (c *Container) Feature(ctx context.Context) (hasFeature bool, err error) {
 	return feature.HasFeature, err
 }
 
-// This seems broken on the proxmox side: https://pve.proxmox.com/pve-docs/api-viewer/index.html#/nodes/{node}/lxc/{vmid}/interfaces
-// I wasn't able to make it work with the API. Tested on {"release":"7.3","repoid":"c3928077","version":"7.3-3"}
-// func (c *Container) Interfaces(ctx context.Context) (interfaces []string, err error) {
-// err = c.client.Get(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/interfaces", c.Node, c.VMID), &interfaces)
-// return interfaces, err
-// }
+func (c *Container) Interfaces(ctx context.Context) (interfaces ContainerInterfaces, err error) {
+	err = c.client.Get(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/interfaces", c.Node, c.VMID), &interfaces)
+	return interfaces, err
+}
 
 func (c *Container) Migrate(ctx context.Context, params *ContainerMigrateOptions) (task *Task, err error) {
 	var upid UPID
@@ -278,4 +288,85 @@ func (c *Container) GetFirewallOptions(ctx context.Context) (options *FirewallVi
 
 func (c *Container) UpdateFirewallOptions(ctx context.Context, options *FirewallVirtualMachineOption) error {
 	return c.client.Put(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/firewall/options", c.Node, c.VMID), options, nil)
+}
+
+// Tag Management Helpers
+
+// HasTag returns if a Tag is present in TagSlice
+func (c *Container) HasTag(value string) bool {
+	if c.ContainerConfig == nil {
+		return false
+	}
+
+	if c.ContainerConfig.Tags == "" {
+		return false
+	}
+
+	if c.ContainerConfig.TagsSlice == nil {
+		c.SplitTags()
+	}
+
+	for _, tag := range c.ContainerConfig.TagsSlice {
+		if tag == value {
+			return true
+		}
+	}
+
+	return false
+}
+
+// AddTag appends the passed value to TagsSlice and updates Tags via c.Config
+// If accurate state is important, then reassign the value of Container after the task
+// has completed.
+func (c *Container) AddTag(ctx context.Context, value string) (*Task, error) {
+	if c.HasTag(value) {
+		return nil, ErrNoop
+	}
+
+	if c.ContainerConfig.TagsSlice == nil {
+		c.SplitTags()
+	}
+
+	c.ContainerConfig.TagsSlice = append(c.ContainerConfig.TagsSlice, value)
+	c.ContainerConfig.Tags = strings.Join(c.ContainerConfig.TagsSlice, TagSeperator)
+	c.Tags = c.ContainerConfig.Tags // Keep the parent object up to date
+
+	return c.Config(ctx, ContainerOption{
+		Name:  "tags",
+		Value: c.ContainerConfig.Tags,
+	})
+}
+
+// RemoveTag removes the passed value from TagsSlice and updates Tags via c.Config
+// If accurate state is important, then reassign the value of Container after the task
+// has completed.
+func (c *Container) RemoveTag(ctx context.Context, value string) (*Task, error) {
+	if !c.HasTag(value) {
+		return nil, ErrNoop
+	}
+
+	if c.ContainerConfig.TagsSlice == nil {
+		c.SplitTags()
+	}
+
+	for i, tag := range c.ContainerConfig.TagsSlice {
+		if tag == value {
+			c.ContainerConfig.TagsSlice = append(
+				c.ContainerConfig.TagsSlice[:i],
+				c.ContainerConfig.TagsSlice[i+1:]...,
+			)
+		}
+	}
+
+	c.ContainerConfig.Tags = strings.Join(c.ContainerConfig.TagsSlice, TagSeperator)
+	c.Tags = c.ContainerConfig.Tags // keep the parent object up to date
+	return c.Config(ctx, ContainerOption{
+		Name:  "tags",
+		Value: c.ContainerConfig.Tags,
+	})
+}
+
+// SplitTags sets ContainerConfig TagsSlice my splitting the value of ContainerConfig.Tags with TagSeparator
+func (c *Container) SplitTags() {
+	c.ContainerConfig.TagsSlice = strings.Split(c.ContainerConfig.Tags, TagSeperator)
 }
