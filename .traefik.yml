@@ -1,6 +1,6 @@
 displayName: Proxmox Provider
 type: provider
-iconPath: .assets/logo.svg
+iconPath: .assets/logo.png
 
 import: github.com/NX211/traefik-proxmox-provider
 
