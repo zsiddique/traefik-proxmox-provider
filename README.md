@@ -1,6 +1,6 @@
 # Traefik Proxmox Provider
 
-![Traefik Proxmox Provider](https://raw.githubusercontent.com/nx211/traefik-proxmox-provider/main/.assets/icon.png)
+![Traefik Proxmox Provider](https://raw.githubusercontent.com/nx211/traefik-proxmox-provider/main/.assets/logo.png)
 
 A [Traefik](https://traefik.io/) provider plugin that automatically configures routing based on Proxmox VE virtual machines and containers.
 
