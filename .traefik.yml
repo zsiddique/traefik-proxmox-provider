@@ -1,0 +1,26 @@
+displayName: Proxmox Provider
+type: provider
+iconPath: .assets/logo.svg
+
+import: github.com/NX211/traefik-proxmox-provider
+
+summary: 'Proxmox Provider - A Traefik provider that automatically configures routing based on Proxmox VE virtual machines and containers'
+
+testData:
+  pollInterval: "5s"
+  apiEndpoint: "https://proxmox.example.com"
+  apiTokenId: "root@pam!traefik"
+  apiToken: "00000000-0000-0000-0000-000000000000"
+  apiLogging: "info"
+  apiValidateSSL: "true"
+
+# Sample provider configuration
+providers:
+  plugin:
+    proxmox:
+      pollInterval: "5s"
+      apiEndpoint: "https://proxmox.example.com"
+      apiTokenId: "root@pam!traefik"
+      apiToken: "00000000-0000-0000-0000-000000000000"
+      apiLogging: "debug"
+      apiValidateSSL: "false"
