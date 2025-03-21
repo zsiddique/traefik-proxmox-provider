@@ -1,6 +1,7 @@
 module github.com/NX211/traefik-proxmox-provider
 
 go 1.19
+toolchain go1.24.1
 
 require (
 	github.com/luthermonson/go-proxmox v0.0.0-beta5
@@ -13,7 +14,7 @@ require (
 	github.com/gorilla/websocket v1.5.1 // indirect
 	github.com/jinzhu/copier v0.4.0 // indirect
 	github.com/magefile/mage v1.15.0 // indirect
-	golang.org/x/net v0.22.0 // indirect
-	golang.org/x/sys v0.18.0 // indirect
+	golang.org/x/net v0.36.0 // indirect
+	golang.org/x/sys v0.30.0 // indirect
 	gopkg.in/djherbis/times.v1 v1.3.0 // indirect
 )
