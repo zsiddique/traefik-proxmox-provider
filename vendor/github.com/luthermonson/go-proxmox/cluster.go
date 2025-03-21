@@ -2,6 +2,7 @@ package proxmox
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -32,6 +33,21 @@ func (cl *Cluster) NextID(ctx context.Context) (int, error) {
 	return strconv.Atoi(ret)
 }
 
+// CheckID checks if the given vmid is free.
+// CheckID calls the /cluster/nextid endpoint with the "vmid" parameter.
+// The API documentation describes the check as: "Pass a VMID to assert that its free (at time of check)."
+// Returns true if the vmid is free, false otherwise.
+func (cl *Cluster) CheckID(ctx context.Context, vmid int) (bool, error) {
+	var ret string
+	err := cl.client.Get(ctx, fmt.Sprintf("/cluster/nextid?vmid=%d", vmid), ret)
+	if err != nil && strings.Contains(err.Error(), fmt.Sprintf("VM %d already exists", vmid)) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // Resources retrieves a summary list of all resources in the cluster.
 // It calls /cluster/resources api v2 endpoint with an optional "type" parameter
 // to filter searched values.
@@ -48,4 +64,18 @@ func (cl *Cluster) Resources(ctx context.Context, filters ...string) (rs Cluster
 	}
 
 	return rs, cl.client.Get(ctx, u.String(), &rs)
+}
+
+func (cl *Cluster) Tasks(ctx context.Context) (Tasks, error) {
+	var tasks Tasks
+
+	if err := cl.client.Get(ctx, "/cluster/tasks", &tasks); err != nil {
+		return nil, err
+	}
+
+	for index := range tasks {
+		tasks[index].client = cl.client
+	}
+
+	return tasks, nil
 }

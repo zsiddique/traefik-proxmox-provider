@@ -4,7 +4,7 @@ go 1.19
 toolchain go1.24.1
 
 require (
-	github.com/luthermonson/go-proxmox v0.0.0-beta5
+	github.com/luthermonson/go-proxmox v0.2.1
 	github.com/traefik/genconf v0.5.2
 )
 

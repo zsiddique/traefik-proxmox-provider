@@ -42,12 +42,12 @@ func (v *VirtualMachine) Config(ctx context.Context, options ...VirtualMachineOp
 	return NewTask(upid, v.client), err
 }
 
-func (v *VirtualMachine) TermProxy(ctx context.Context) (vnc *VNC, err error) {
-	return vnc, v.client.Post(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/termproxy", v.Node, v.VMID), nil, &vnc)
+func (v *VirtualMachine) TermProxy(ctx context.Context) (term *Term, err error) {
+	return term, v.client.Post(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/termproxy", v.Node, v.VMID), nil, &term)
 }
 
-func (v *VirtualMachine) VNCProxy(ctx context.Context) (vnc *VNC, err error) {
-	return vnc, v.client.Post(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/vncproxy", v.Node, v.VMID), nil, &vnc)
+func (v *VirtualMachine) VNCProxy(ctx context.Context, config *VNCConfig) (vnc *VNC, err error) {
+	return vnc, v.client.Post(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/vncproxy?", v.Node, v.VMID), config, &vnc)
 }
 
 func (v *VirtualMachine) HasTag(value string) bool {
@@ -167,7 +167,6 @@ func (v *VirtualMachine) CloudInit(ctx context.Context, device, userdata, metada
 		Name:  "boot",
 		Value: fmt.Sprintf("%s;%s", v.VirtualMachineConfig.Boot, device),
 	})
-
 	if err != nil {
 		return err
 	}
@@ -226,10 +225,17 @@ func makeCloudInitISO(filename, userdata, metadata, vendordata, networkconfig st
 	return
 }
 
+func (v *VirtualMachine) TermWebSocket(term *Term) (chan []byte, chan []byte, chan error, func() error, error) {
+	p := fmt.Sprintf("/nodes/%s/qemu/%d/vncwebsocket?port=%d&vncticket=%s",
+		v.Node, v.VMID, term.Port, url.QueryEscape(term.Ticket))
+
+	return v.client.TermWebSocket(p, term)
+}
+
 // VNCWebSocket copy/paste when calling to get the channel names right
 // send, recv, errors, closer, errors := vm.VNCWebSocket(vnc)
 // for this to work you need to first set up a serial terminal on your vm https://pve.proxmox.com/wiki/Serial_Terminal
-func (v *VirtualMachine) VNCWebSocket(vnc *VNC) (chan string, chan string, chan error, func() error, error) {
+func (v *VirtualMachine) VNCWebSocket(vnc *VNC) (chan []byte, chan []byte, chan error, func() error, error) {
 	p := fmt.Sprintf("/nodes/%s/qemu/%d/vncwebsocket?port=%d&vncticket=%s",
 		v.Node, v.VMID, vnc.Port, url.QueryEscape(vnc.Ticket))
 
@@ -237,7 +243,7 @@ func (v *VirtualMachine) VNCWebSocket(vnc *VNC) (chan string, chan string, chan 
 }
 
 func (v *VirtualMachine) IsRunning() bool {
-	return v.Status == StatusVirtualMachineRunning && v.QMPStatus == StatusVirtualMachineRunning
+	return v.Status == StatusVirtualMachineRunning && (v.QMPStatus == "" || v.QMPStatus == StatusVirtualMachineRunning)
 }
 
 func (v *VirtualMachine) Start(ctx context.Context) (task *Task, err error) {
@@ -250,7 +256,7 @@ func (v *VirtualMachine) Start(ctx context.Context) (task *Task, err error) {
 }
 
 func (v *VirtualMachine) IsStopped() bool {
-	return v.Status == StatusVirtualMachineStopped && v.QMPStatus == StatusVirtualMachineStopped
+	return v.Status == StatusVirtualMachineStopped && (v.Lock != "suspended")
 }
 
 func (v *VirtualMachine) Reset(ctx context.Context) (task *Task, err error) {
@@ -294,7 +300,7 @@ func (v *VirtualMachine) Pause(ctx context.Context) (task *Task, err error) {
 }
 
 func (v *VirtualMachine) IsHibernated() bool {
-	return v.Status == StatusVirtualMachineStopped && v.QMPStatus == StatusVirtualMachineStopped && v.Lock == "suspended"
+	return v.Status == StatusVirtualMachineStopped && v.Lock == "suspended"
 }
 
 func (v *VirtualMachine) Hibernate(ctx context.Context) (task *Task, err error) {
@@ -401,6 +407,8 @@ func (v *VirtualMachine) Clone(ctx context.Context, params *VirtualMachineCloneO
 			return newid, nil, err
 		}
 		params.NewID = newid
+	} else {
+		newid = params.NewID
 	}
 
 	if err := v.client.Post(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/clone", v.Node, v.VMID), params, &upid); err != nil {
@@ -469,7 +477,7 @@ func (v *VirtualMachine) AgentGetNetworkIFaces(ctx context.Context) (iFaces []*A
 	}
 	if result, ok := networks["result"]; ok {
 		for _, iface := range result {
-			if "lo" == iface.Name {
+			if iface.Name == "lo" {
 				continue
 			}
 			iFaces = append(iFaces, iface)
@@ -509,7 +517,12 @@ func (v *VirtualMachine) AgentExec(ctx context.Context, command []string, inputD
 			"input-data": inputData,
 		},
 		&tmpdata)
-	pid = int(tmpdata["pid"].(float64))
+
+	p := tmpdata["pid"]
+	if p == nil {
+		return 0, fmt.Errorf("no pid returned from agent exec command")
+	}
+	pid = int(p.(float64))
 	return
 }
 
@@ -642,4 +655,23 @@ func (v *VirtualMachine) ConvertToTemplate(ctx context.Context) (task *Task, err
 		return nil, err
 	}
 	return NewTask(upid, v.client), nil
+}
+
+func (v *VirtualMachine) UnmountCloudInitISO(ctx context.Context, device string) error {
+	if !v.HasTag(MakeTag(TagCloudInit)) {
+		return nil
+	}
+
+	_, err := v.Config(ctx, VirtualMachineOption{
+		Name:  device,
+		Value: "none,media=cdrom",
+	})
+	if err != nil {
+		return err
+	}
+
+	if _, err = v.deleteCloudInitISO(ctx); err != nil {
+		return err
+	}
+	return nil
 }
