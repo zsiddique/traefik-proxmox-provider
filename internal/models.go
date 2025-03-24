@@ -2,8 +2,6 @@ package internal
 
 import (
 	"strings"
-
-	"github.com/luthermonson/go-proxmox"
 )
 
 type ParsedConfig struct {
@@ -22,6 +20,26 @@ type Node struct {
 	Status string `json:"status,omitempty"`
 }
 
+type NodeStatus struct {
+	Node string `json:"node"`
+}
+
+type VirtualMachine struct {
+	VMID   uint64 `json:"vmid"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+type Container struct {
+	VMID   uint64 `json:"vmid"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+type Version struct {
+	Release string `json:"release"`
+}
+
 type Service struct {
 	ID     uint64
 	Name   string
@@ -35,8 +53,8 @@ type IP struct {
 	Prefix      uint64 `json:"prefix,omitempty"`
 }
 
-func NewService(id proxmox.StringOrUint64, name string, config map[string]string) Service {
-	return Service{ID: uint64(id), Name: name, Config: config, IPs: make([]IP, 0)}
+func NewService(id uint64, name string, config map[string]string) Service {
+	return Service{ID: id, Name: name, Config: config, IPs: make([]IP, 0)}
 }
 
 func (pc *ParsedConfig) GetTraefikMap() map[string]string {

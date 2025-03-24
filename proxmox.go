@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/NX211/traefik-proxmox-provider/internal"
-	"github.com/luthermonson/go-proxmox"
 	"github.com/traefik/genconf/dynamic"
 	"github.com/traefik/genconf/dynamic/tls"
 )
@@ -37,7 +36,7 @@ func CreateConfig() *Config {
 type Provider struct {
 	name         string
 	pollInterval time.Duration
-	client       *proxmox.Client
+	client       *internal.ProxmoxClient
 	cancel       func()
 }
 

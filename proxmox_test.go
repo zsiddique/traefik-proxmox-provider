@@ -204,49 +204,30 @@ func TestGetParserConfigLogLevel(t *testing.T) {
 	tests := []struct {
 		name     string
 		logLevel string
+		expected string
 	}{
 		{
 			name:     "Debug level",
 			logLevel: "debug",
+			expected: internal.LogLevelDebug,
 		},
 		{
 			name:     "Info level",
 			logLevel: "info",
+			expected: internal.LogLevelInfo,
 		},
 		{
 			name:     "Empty defaults to info",
 			logLevel: "",
+			expected: internal.LogLevelInfo,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			logger := GetParserConfigLogLevel(tt.logLevel)
-			if logger == nil {
-				t.Error("Expected logger to not be nil")
-				return
-			}
-			
-			// Set expected level
-			expectedLevel := "info" // Default
-			if tt.logLevel != "" {
-				expectedLevel = tt.logLevel
-			}
-			
-			// Get actual level string from the logger
-			var actualLevel string
-			switch logger.Level {
-			case 4:
-				actualLevel = "debug"
-			case 3:
-				actualLevel = "info"
-			default:
-				actualLevel = fmt.Sprintf("unknown(%d)", logger.Level)
-			}
-			
-			// Compare the actual with expected
-			if actualLevel != expectedLevel {
-				t.Errorf("Expected log level '%s', got '%s'", expectedLevel, actualLevel)
+			level := GetParserConfigLogLevel(tt.logLevel)
+			if level != tt.expected {
+				t.Errorf("Expected log level '%s', got '%s'", tt.expected, level)
 			}
 		})
 	}
