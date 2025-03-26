@@ -2,14 +2,11 @@ package proxmox_plugin
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
 
 	"github.com/NX211/traefik-proxmox-provider/internal"
-	"github.com/luthermonson/go-proxmox"
 )
 
 var ParserConfigLogLevelInfo string = "info"
@@ -36,24 +33,12 @@ func NewParserConfig(apiEndpoint, tokenID, token string) (ParserConfig, error) {
 	}, nil
 }
 
-func NewClient(pc ParserConfig) *proxmox.Client {
-	insecureHTTPClient := http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: getTLSClientConfig(pc),
-		},
-	}
-
-	client := proxmox.NewClient(fmt.Sprintf("%s/api2/json", pc.ApiEndpoint),
-		proxmox.WithHTTPClient(&insecureHTTPClient),
-		proxmox.WithAPIToken(pc.TokenId, pc.Token),
-		proxmox.WithLogger(GetParserConfigLogLevel(pc.LogLevel)),
-	)
-
-	return client
+func NewClient(pc ParserConfig) *internal.ProxmoxClient {
+	return internal.NewProxmoxClient(pc.ApiEndpoint, pc.TokenId, pc.Token, pc.ValidateSSL, pc.LogLevel)
 }
 
-func LogVersion(client *proxmox.Client, ctx context.Context) error {
-	version, err := client.Version(ctx)
+func LogVersion(client *internal.ProxmoxClient, ctx context.Context) error {
+	version, err := client.GetVersion(ctx)
 	if err != nil {
 		return err
 	}
@@ -61,90 +46,87 @@ func LogVersion(client *proxmox.Client, ctx context.Context) error {
 	return nil
 }
 
-func GetServiceMap(client *proxmox.Client, ctx context.Context) (map[string][]internal.Service, error) {
-
+func GetServiceMap(client *internal.ProxmoxClient, ctx context.Context) (map[string][]internal.Service, error) {
 	servicesMap := make(map[string][]internal.Service)
 
-	nodes, err := client.Nodes(ctx)
+	nodes, err := client.GetNodes(ctx)
 	if err != nil {
-		log.Fatalf("error, scanning nodes %s", err)
+		log.Fatalf("error scanning nodes: %s", err)
 	}
 
 	for _, nodeStatus := range nodes {
-		node, err := client.Node(ctx, nodeStatus.Node)
+		services, err := scanServices(client, ctx, nodeStatus.Node)
 		if err != nil {
-			log.Fatalf("error %s requesting node %s", err, nodeStatus.Node)
-		} else {
-			services, err := scanServices(client, ctx, node)
-			if err != nil {
-				log.Fatalf("error, scanning services %s", err)
-			}
-			servicesMap[nodeStatus.Node] = services
+			log.Fatalf("error scanning services on node %s: %s", nodeStatus.Node, err)
 		}
+		servicesMap[nodeStatus.Node] = services
 	}
 	return servicesMap, nil
 }
 
-func getIPsOfService(client *proxmox.Client, ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine) (ips []internal.IP, err error) {
-	var ifs internal.ParsedAgentInterfaces
-	err = client.Get(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/agent/network-get-interfaces", node.Name, vm.VMID), &ifs)
+func getIPsOfService(client *internal.ProxmoxClient, ctx context.Context, nodeName string, vmID uint64) (ips []internal.IP, err error) {
+	interfaces, err := client.GetVMNetworkInterfaces(ctx, nodeName, vmID)
 	if err != nil {
 		return nil, err
 	}
-	return ifs.GetIPs(), nil
+	return interfaces.GetIPs(), nil
 }
 
-func scanServices(client *proxmox.Client, ctx context.Context, node *proxmox.Node) (services []internal.Service, err error) {
-	vms, err := node.VirtualMachines(ctx)
+func scanServices(client *internal.ProxmoxClient, ctx context.Context, nodeName string) (services []internal.Service, err error) {
+	// Scan virtual machines
+	vms, err := client.GetVirtualMachines(ctx, nodeName)
+	if err != nil {
+		return nil, fmt.Errorf("error scanning VMs on node %s: %s", nodeName, err)
+	}
+
 	for _, vm := range vms {
-		log.Printf("scanning vm %s/%s (%d): %s", node.Name, vm.Name, vm.VMID, vm.Status)
-		var config internal.ParsedConfig
-		err = client.Get(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/config", node.Name, vm.VMID), &config)
-		if err != nil {
-			return services, err
-		}
+		log.Printf("scanning vm %s/%s (%d): %s", nodeName, vm.Name, vm.VMID, vm.Status)
+		
 		if vm.Status == "running" {
+			config, err := client.GetVMConfig(ctx, nodeName, vm.VMID)
+			if err != nil {
+				log.Printf("error getting VM config for %d: %s", vm.VMID, err)
+				continue
+			}
+			
 			service := internal.NewService(vm.VMID, vm.Name, config.GetTraefikMap())
-			ips, err := getIPsOfService(client, ctx, node, vm)
+			
+			ips, err := getIPsOfService(client, ctx, nodeName, vm.VMID)
 			if err == nil {
 				service.IPs = ips
 			}
+			
 			services = append(services, service)
 		}
 	}
+
+	// Scan containers
+	cts, err := client.GetContainers(ctx, nodeName)
 	if err != nil {
-		return services, err
+		return nil, fmt.Errorf("error scanning containers on node %s: %s", nodeName, err)
 	}
 
-	cts, err := node.Containers(ctx)
 	for _, ct := range cts {
-		log.Printf("scanning ct %s/%s (%d): %s", node.Name, ct.Name, ct.VMID, ct.Status)
-		var config internal.ParsedConfig
-		err = client.Get(ctx, fmt.Sprintf("/nodes/%s/lxc/%d/config", node.Name, ct.VMID), &config)
-		if err != nil {
-			return services, err
-		}
+		log.Printf("scanning ct %s/%s (%d): %s", nodeName, ct.Name, ct.VMID, ct.Status)
+		
 		if ct.Status == "running" {
+			config, err := client.GetContainerConfig(ctx, nodeName, ct.VMID)
+			if err != nil {
+				log.Printf("error getting container config for %d: %s", ct.VMID, err)
+				continue
+			}
+			
 			service := internal.NewService(ct.VMID, ct.Name, config.GetTraefikMap())
 			services = append(services, service)
 		}
-	}
-	if err != nil {
-		return services, err
 	}
 
 	return services, nil
 }
 
-func GetParserConfigLogLevel(logLevel string) (logger *proxmox.LeveledLogger) {
+func GetParserConfigLogLevel(logLevel string) string {
 	if logLevel == "debug" {
-		return &proxmox.LeveledLogger{Level: proxmox.LevelDebug}
+		return internal.LogLevelDebug
 	}
-	return &proxmox.LeveledLogger{Level: proxmox.LevelInfo}
-}
-
-func getTLSClientConfig(pc ParserConfig) (config *tls.Config) {
-	return &tls.Config{
-		InsecureSkipVerify: !pc.ValidateSSL,
-	}
+	return internal.LogLevelInfo
 }
