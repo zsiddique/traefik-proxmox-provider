@@ -1,4 +1,4 @@
-.PHONY: lint test vendor clean
+.PHONY: lint test vendor clean yaegi_test
 
 export GO111MODULE=on
 
@@ -11,10 +11,14 @@ test:
 	go test -v -cover ./...
 
 yaegi_test:
-	yaegi test .
+	mkdir -p ./tmp/src/github.com/NX211/traefik-proxmox-provider
+	cp -r ./* ./tmp/src/github.com/NX211/traefik-proxmox-provider/
+	GOPATH=$(shell pwd)/tmp yaegi test github.com/NX211/traefik-proxmox-provider
+	rm -rf ./tmp
 
 vendor:
 	go mod vendor
 
 clean:
 	rm -rf ./vendor
+	rm -rf ./tmp

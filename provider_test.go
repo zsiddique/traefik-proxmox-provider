@@ -9,8 +9,8 @@ import (
 
 func TestProviderConfig(t *testing.T) {
 	config := CreateConfig()
-	if config.PollInterval != "5s" {
-		t.Errorf("Expected default PollInterval to be '5s', got %s", config.PollInterval)
+	if config.PollInterval != "30s" {
+		t.Errorf("Expected default PollInterval to be '30s', got %s", config.PollInterval)
 	}
 	if config.ApiValidateSSL != "true" {
 		t.Errorf("Expected default ApiValidateSSL to be 'true', got %s", config.ApiValidateSSL)
