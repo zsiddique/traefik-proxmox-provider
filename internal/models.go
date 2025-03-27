@@ -61,13 +61,23 @@ func (pc *ParsedConfig) GetTraefikMap() map[string]string {
 	m := make(map[string]string)
 	lines := strings.Split(pc.Description, "\n")
 	for _, l := range lines {
-		parts := strings.Split(l, ":")
-		if len(parts) > 1 {
-			k := strings.Replace(parts[0], "\"", "", -1)
-			v := strings.Replace(parts[1], "\"", "", -1)
-			if strings.HasPrefix(k, "traefik") {
-				m[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		var k, v string
+		if strings.Contains(l, ":") {
+			parts := strings.SplitN(l, ":", 2)
+			if len(parts) > 1 {
+				k = strings.Replace(parts[0], "\"", "", -1)
+				v = strings.Replace(parts[1], "\"", "", -1)
 			}
+		} else if strings.Contains(l, "=") {
+			parts := strings.SplitN(l, "=", 2)
+			if len(parts) > 1 {
+				k = strings.Replace(parts[0], "\"", "", -1)
+				v = strings.Replace(parts[1], "\"", "", -1)
+			}
+		}
+		
+		if k != "" && strings.HasPrefix(k, "traefik") {
+			m[strings.TrimSpace(k)] = strings.TrimSpace(v)
 		}
 	}
 	return m

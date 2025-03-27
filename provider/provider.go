@@ -223,7 +223,10 @@ func scanServices(client *internal.ProxmoxClient, ctx context.Context, nodeName 
 				continue
 			}
 			
-			service := internal.NewService(vm.VMID, vm.Name, config.GetTraefikMap())
+			traefikConfig := config.GetTraefikMap()
+			log.Printf("VM %s (%d) traefik config: %v", vm.Name, vm.VMID, traefikConfig)
+			
+			service := internal.NewService(vm.VMID, vm.Name, traefikConfig)
 			
 			ips, err := getIPsOfService(client, ctx, nodeName, vm.VMID)
 			if err == nil {
@@ -250,7 +253,17 @@ func scanServices(client *internal.ProxmoxClient, ctx context.Context, nodeName 
 				continue
 			}
 			
-			service := internal.NewService(ct.VMID, ct.Name, config.GetTraefikMap())
+			traefikConfig := config.GetTraefikMap()
+			log.Printf("Container %s (%d) traefik config: %v", ct.Name, ct.VMID, traefikConfig)
+			
+			service := internal.NewService(ct.VMID, ct.Name, traefikConfig)
+			
+			// Try to get container IPs if possible
+			ips, err := getIPsOfService(client, ctx, nodeName, ct.VMID)
+			if err == nil {
+				service.IPs = ips
+			}
+			
 			services = append(services, service)
 		}
 	}
@@ -280,7 +293,86 @@ func generateConfiguration(date time.Time, servicesMap map[string][]internal.Ser
 		},
 	}
 
+	// Loop through all node service maps
+	for nodeName, services := range servicesMap {
+		// Loop through all services in this node
+		for _, service := range services {
+			// Check if traefik.enable is set to true
+			if enable, exists := service.Config["traefik.enable"]; !exists || enable != "true" {
+				log.Printf("Skipping service %s (ID: %d) because traefik.enable is not true", service.Name, service.ID)
+				continue
+			}
+
+			// Service name will be used to identify this service
+			serviceName := fmt.Sprintf("%s-%d", service.Name, service.ID)
+			
+			// Create a default LoadBalancer service
+			lb := &dynamic.ServersLoadBalancer{
+				PassHostHeader: boolPtr(true),
+				Servers:        []dynamic.Server{},
+			}
+			
+			// Add server endpoints based on IPs
+			if len(service.IPs) > 0 {
+				log.Printf("Found %d IPs for service %s (ID: %d)", len(service.IPs), service.Name, service.ID)
+				for _, ip := range service.IPs {
+					if ip.Address != "" {
+						// Default to port 80 if not specified
+						port := "80"
+						if customPort, exists := service.Config["traefik.http.services.port"]; exists {
+							port = customPort
+						}
+						url := fmt.Sprintf("http://%s:%s", ip.Address, port)
+						lb.Servers = append(lb.Servers, dynamic.Server{URL: url})
+						log.Printf("Added server URL %s for service %s (ID: %d)", url, service.Name, service.ID)
+					}
+				}
+			} else {
+				// If no IPs found, try to use VM/container name as hostname
+				port := "80"
+				if customPort, exists := service.Config["traefik.http.services.port"]; exists {
+					port = customPort
+				}
+				url := fmt.Sprintf("http://%s.%s:%s", service.Name, nodeName, port)
+				lb.Servers = append(lb.Servers, dynamic.Server{URL: url})
+				log.Printf("No IPs found, using hostname URL %s for service %s (ID: %d)", url, service.Name, service.ID)
+			}
+			
+			// Create the service if we have servers
+			if len(lb.Servers) > 0 {
+				configuration.HTTP.Services[serviceName] = &dynamic.Service{
+					LoadBalancer: lb,
+				}
+				
+				// Default router rule
+				routerRule := fmt.Sprintf("Host(`%s`)", service.Name)
+				
+				// Check for custom router rule
+				if customRule, exists := service.Config["traefik.http.routers.rule"]; exists {
+					routerRule = customRule
+				}
+				
+				// Create the router
+				configuration.HTTP.Routers[serviceName] = &dynamic.Router{
+					Service:  serviceName,
+					Rule:     routerRule,
+					Priority: 1,
+				}
+				
+				log.Printf("Created router and service for %s (ID: %d) with rule %s", service.Name, service.ID, routerRule)
+			}
+		}
+	}
+
 	return configuration
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func intPtr(v int) *int {
+	return &v
 }
 
 // validateConfig validates the plugin configuration
