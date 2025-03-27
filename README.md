@@ -2,32 +2,27 @@
 
 ![Traefik Proxmox Provider](https://raw.githubusercontent.com/nx211/traefik-proxmox-provider/main/.assets/logo.png)
 
-A [Traefik](https://traefik.io/) provider plugin that automatically configures routing based on Proxmox VE virtual machines and containers.
+A Traefik provider that automatically configures routing based on Proxmox VE virtual machines and containers.
 
 ## Features
 
-* Automatic discovery of Proxmox VE virtual machines and containers
-* Traefik configuration extraction from VM/CT description fields
-* Automatic IP address discovery via QEMU Guest Agent
-* Manual IP configuration for containers
-* Configurable polling interval for real-time updates
-* SSL validation options
-* Configurable logging levels
-* Support for both VMs (QEMU) and Containers (LXC)
+- Automatically discovers Proxmox VE virtual machines and containers
+- Configures routing based on VM/container metadata
+- Supports both HTTP and HTTPS endpoints
+- Configurable polling interval
+- SSL validation options
+- Logging configuration
 
 ## Installation
 
-To configure the Proxmox Provider in your Traefik instance:
-
-1. Enable the plugin in your static configuration:
+1. Add the plugin to your Traefik configuration:
 
 ```yaml
-# Static configuration
 experimental:
   plugins:
-    proxmox:
+    traefik-proxmox-provider:
       moduleName: github.com/NX211/traefik-proxmox-provider
-      version: v0.1.0
+      version: v0.4.0
 ```
 
 2. Configure the provider in your dynamic configuration:
@@ -36,7 +31,7 @@ experimental:
 # Dynamic configuration
 providers:
   plugin:
-    proxmox:
+    traefik-proxmox-provider:
       pollInterval: "5s"
       apiEndpoint: "https://proxmox.example.com"
       apiTokenId: "root@pam!traefik"
@@ -47,102 +42,66 @@ providers:
 
 ## Configuration
 
-### Provider Configuration Options
+### Provider Options
 
-| Option | Type | Required | Default | Description |
-|--------|------|----------|---------|-------------|
-| pollInterval | string | No | "5s" | How often to poll the Proxmox API |
-| apiEndpoint | string | Yes | | The URL of your Proxmox API endpoint |
-| apiTokenId | string | Yes | | The Proxmox API token ID |
-| apiToken | string | Yes | | The Proxmox API token |
-| apiLogging | string | No | "info" | Logging level ("info" or "debug") |
-| apiValidateSSL | string | No | "true" | Whether to validate SSL certificates |
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `pollInterval` | `string` | `"5s"` | How often to poll the Proxmox API for changes |
+| `apiEndpoint` | `string` | - | The URL of your Proxmox VE API |
+| `apiTokenId` | `string` | - | The API token ID (e.g., "root@pam!traefik") |
+| `apiToken` | `string` | - | The API token secret |
+| `apiLogging` | `string` | `"info"` | Log level for API operations ("debug" or "info") |
+| `apiValidateSSL` | `string` | `"true"` | Whether to validate SSL certificates |
 
-### VM/CT Configuration Format
+## Usage
 
-Each service's Traefik configuration must be specified in the VM/CT description field using this format:
+1. Create an API token in Proxmox VE:
+   - Go to Datacenter -> Permissions -> API Tokens
+   - Add a new token with appropriate permissions
+   - Copy the token ID and secret
 
-```ini
-"traefik.enable": "true" 
-"traefik.http.routers.myapp.entrypoints": "http" 
-"traefik.http.routers.myapp.rule": "Host(`example.com`)" 
-"traefik.http.services.myapp.loadbalancer.server.port": "80"
-```
+2. Configure the provider in your Traefik configuration:
+   - Set the `apiEndpoint` to your Proxmox VE server URL
+   - Set the `apiTokenId` and `apiToken` from step 1
+   - Adjust other options as needed
 
-For containers that need manual IP configuration:
+3. Add metadata to your VMs/containers:
+   - In the VM/container description, add Traefik labels
+   - Example: `traefik.enable=true`
+   - Example: `traefik.http.routers.myapp.rule=Host(`myapp.example.com`)`
 
-```ini
-"traefik.enable": "true"
-"traefik.http.routers.web.entrypoints": "http"
-"traefik.http.routers.web.rule": "Host(`web.example.com`)"
-"traefik.http.services.web.loadbalancer.server.port": "80"
-"traefik.http.services.web.loadbalancer.server.ipv4": "192.168.168.131" 
-```
+4. Restart Traefik to load the new configuration
 
-## Required Permissions
-
-The plugin requires these Proxmox API permissions:
-
-```
-token:root@pam!traefik:0:0::
-role:API-READER:Datastore.Audit,SDN.Audit,Sys.Audit,VM.Audit,VM.Config.Options:
-acl:1:/:root@pam!traefik:API-READER:
-```
-
-## Example Usage
+## Examples
 
 ### Basic Configuration
 
 ```yaml
 providers:
   plugin:
-    proxmox:
+    traefik-proxmox-provider:
       pollInterval: "5s"
       apiEndpoint: "https://proxmox.example.com"
       apiTokenId: "root@pam!traefik"
       apiToken: "your-api-token"
-      apiLogging: "debug"
-      apiValidateSSL: "false"
+      apiLogging: "info"
+      apiValidateSSL: "true"
 ```
 
-### VM Configuration Example
+### VM/Container Metadata Example
 
-In your Proxmox VM's description field:
+Add this to your VM/container description in Proxmox:
 
-```ini
-"traefik.enable": "true" 
-"traefik.http.routers.myvm.entrypoints": "http" 
-"traefik.http.routers.myvm.rule": "Host(`myvm.example.com`)" 
-"traefik.http.services.myvm.loadbalancer.server.port": "80"
+```
+traefik.enable=true
+traefik.http.routers.myapp.rule=Host(`myapp.example.com`)
+traefik.http.services.myapp.loadbalancer.server.port=8080
 ```
 
-## Development
+## Contributing
 
-To build and test the plugin:
-
-```bash
-# Run tests
-go test ./...
-
-# Build the plugin
-go build ./...
-```
-
-### Local Development
-
-For local development, you can use environment variables with direnv:
-
-```bash
-# Copy the example .envrc file
-cp .envrc.example .envrc
-
-# Edit the file with your configuration
-# Then allow it to load
-direnv allow
-```
-
-forked from phaus/traefik-proxmox-plugin
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the Apache License 2.0. See the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
