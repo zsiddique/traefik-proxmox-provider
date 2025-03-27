@@ -12,6 +12,7 @@ A Traefik provider that automatically configures routing based on Proxmox VE vir
 - Configurable polling interval
 - SSL validation options
 - Logging configuration
+- Full support for Traefik's routing, middleware, and TLS options
 
 ## Installation
 
@@ -22,7 +23,7 @@ experimental:
   plugins:
     traefik-proxmox-provider:
       moduleName: github.com/NX211/traefik-proxmox-provider
-      version: v0.5.6
+      version: v0.7.0
 ```
 
 2. Configure the provider in your dynamic configuration:
@@ -97,8 +98,62 @@ The provider looks for Traefik labels in the VM/container notes field. Each line
 
 ### Common Labels
 
-- `traefik.http.routers.rule=Host(`myapp.example.com`)` - The router rule for this service
-- `traefik.http.services.port=8080` - The port to route traffic to (defaults to 80)
+- `traefik.http.routers.<name>.rule=Host(`myapp.example.com`)` - The router rule for this service
+- `traefik.http.services.<name>.loadbalancer.server.port=8080` - The port to route traffic to (defaults to 80)
+
+### Advanced Label Examples
+
+#### Named Routers and Services
+
+```
+traefik.enable=true
+traefik.http.routers.myapp.rule=Host(`myapp.example.com`)
+traefik.http.services.appservice.loadbalancer.server.port=8080
+traefik.http.routers.myapp.service=appservice
+```
+
+#### EntryPoints
+
+```
+traefik.http.routers.myapp.entrypoints=websecure
+```
+
+#### Middlewares
+
+```
+traefik.http.routers.myapp.middlewares=compression,auth@file
+```
+
+#### TLS Configuration
+
+```
+traefik.http.routers.myapp.tls=true
+traefik.http.routers.myapp.tls.certresolver=myresolver
+traefik.http.routers.myapp.tls.domains=example.com
+traefik.http.routers.myapp.tls.options=tlsoptions@file
+```
+
+#### Health Checks
+
+```
+traefik.http.services.myservice.loadbalancer.healthcheck.path=/health
+traefik.http.services.myservice.loadbalancer.healthcheck.interval=10s
+traefik.http.services.myservice.loadbalancer.healthcheck.timeout=5s
+```
+
+#### Sticky Sessions
+
+```
+traefik.http.services.myservice.loadbalancer.sticky.cookie.name=session
+traefik.http.services.myservice.loadbalancer.sticky.cookie.secure=true
+traefik.http.services.myservice.loadbalancer.sticky.cookie.httponly=true
+```
+
+#### HTTPS Backend Services
+
+```
+traefik.http.services.myservice.loadbalancer.server.scheme=https
+```
 
 ### Full Example of VM/Container Notes
 
@@ -107,8 +162,13 @@ My application server
 Some notes about this server
 
 traefik.enable=true
-traefik.http.routers.rule=Host(`myapp.example.com`)
-traefik.http.services.port=8080
+traefik.http.routers.myapp.rule=Host(`myapp.example.com`)
+traefik.http.routers.myapp.entrypoints=websecure
+traefik.http.routers.myapp.middlewares=auth@file,compression
+traefik.http.routers.myapp.tls=true
+traefik.http.routers.myapp.tls.certresolver=myresolver
+traefik.http.services.myapp.loadbalancer.server.port=8080
+traefik.http.services.myapp.loadbalancer.healthcheck.path=/health
 ```
 
 ## How It Works
@@ -142,26 +202,31 @@ providers:
 Simple web server:
 ```
 traefik.enable=true
-traefik.http.routers.rule=Host(`myapp.example.com`)
+traefik.http.routers.app.rule=Host(`myapp.example.com`)
 ```
 
-Custom port:
+Secure website with HTTPS:
 ```
 traefik.enable=true
-traefik.http.routers.rule=Host(`api.example.com`)
-traefik.http.services.port=3000
+traefik.http.routers.secure.rule=Host(`secure.example.com`)
+traefik.http.routers.secure.entrypoints=websecure
+traefik.http.routers.secure.tls=true
+traefik.http.routers.secure.tls.certresolver=dnschallenge
 ```
 
-Multiple hosts:
+API with authentication and rate limiting:
 ```
 traefik.enable=true
-traefik.http.routers.rule=Host(`app.example.com`) || Host(`www.example.com`)
+traefik.http.routers.api.rule=Host(`api.example.com`)
+traefik.http.routers.api.middlewares=auth@file,ratelimit@file
+traefik.http.services.api.loadbalancer.server.port=3000
 ```
 
-Path-based routing:
+Multiple hosts with path-based routing:
 ```
 traefik.enable=true
-traefik.http.routers.rule=Host(`example.com`) && PathPrefix(`/api`)
+traefik.http.routers.multi.rule=Host(`example.com`,`www.example.com`) && PathPrefix(`/api`)
+traefik.http.routers.multi.priority=100
 ```
 
 ## Troubleshooting
@@ -173,6 +238,7 @@ If your services aren't being discovered:
 3. Verify that VMs/containers are in the "running" state
 4. Check that the provider can successfully connect to your Proxmox API
 5. Verify the API token has sufficient permissions
+6. Check the Traefik logs for any errors related to entrypoints or middleware references
 
 ## Contributing
 

@@ -1,5 +1,33 @@
 # Changelog
 
+## [v0.7.0] - 2024-03-28
+
+### Added
+
+- Support for all Traefik label options in routers and services
+- Proper handling of entrypoints, including singular and plural forms
+- Full TLS configuration support including certResolver, options, and domains
+- Middleware integration with comma-separated lists
+- Support for HTTPS service URLs with proper protocol and default port detection
+- Health check configuration for load balancers
+- Sticky sessions support with cookie configuration 
+- Response forwarding options
+- Advanced router options (priority, middlewares)
+
+### Fixed
+
+- Router entrypoint configuration now properly respected
+- TLS certificate resolver settings correctly applied
+- Middleware configurations properly passed to routers
+- Service URLs now use the correct protocol (http/https)
+- Default ports updated based on protocol (80 for HTTP, 443 for HTTPS)
+
+### Changed
+
+- Configuration generation completely refactored for label compatibility
+- More modular code structure with dedicated functions for router and service options
+- Improved logging with clearer messages about configuration creation
+
 ## [v0.6.0] - 2024-03-27
 
 ### Added

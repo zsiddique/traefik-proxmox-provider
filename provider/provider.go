@@ -13,6 +13,7 @@ import (
 	"github.com/NX211/traefik-proxmox-provider/internal"
 	"github.com/traefik/genconf/dynamic"
 	"github.com/traefik/genconf/dynamic/tls"
+	"github.com/traefik/genconf/dynamic/types"
 )
 
 // Config the plugin configuration.
@@ -340,19 +341,29 @@ func generateConfiguration(servicesMap map[string][]internal.Service) *dynamic.C
 			
 			// Create services
 			for _, serviceName := range serviceNames {
+				// Configure load balancer options
+				loadBalancer := &dynamic.ServersLoadBalancer{
+					PassHostHeader: boolPtr(true), // Default is true
+					Servers:        []dynamic.Server{},
+				}
+				
+				// Apply service options
+				applyServiceOptions(loadBalancer, service, serviceName)
+				
+				// Add server URL(s)
 				serverURL := getServiceURL(service, serviceName, nodeName)
+				loadBalancer.Servers = append(loadBalancer.Servers, dynamic.Server{
+					URL: serverURL,
+				})
+				
 				config.HTTP.Services[serviceName] = &dynamic.Service{
-					LoadBalancer: &dynamic.ServersLoadBalancer{
-						PassHostHeader: boolPtr(true),
-						Servers: []dynamic.Server{
-							{URL: serverURL},
-						},
-					},
+					LoadBalancer: loadBalancer,
 				}
 			}
 			
 			// Create routers
 			for _, routerName := range routerNames {
+				// Get router rule
 				rule := getRouterRule(service, routerName)
 				
 				// Find target service (prefer explicit mapping)
@@ -362,24 +373,177 @@ func generateConfiguration(servicesMap map[string][]internal.Service) *dynamic.C
 					targetService = val
 				}
 				
-				config.HTTP.Routers[routerName] = &dynamic.Router{
+				// Create basic router
+				router := &dynamic.Router{
 					Service:  targetService,
 					Rule:     rule,
-					Priority: 1,
+					Priority: 1, // Default priority
 				}
+				
+				// Apply additional router options from labels
+				applyRouterOptions(router, service, routerName)
+				
+				config.HTTP.Routers[routerName] = router
 			}
 			
-			log.Printf("Created router and service for %s (ID: %d) with rule %s", 
-				service.Name, service.ID, config.HTTP.Routers[routerNames[0]].Rule)
+			log.Printf("Created router and service for %s (ID: %d)", service.Name, service.ID)
 		}
 	}
 	
 	return config
 }
 
+// Apply router configuration options from labels
+func applyRouterOptions(router *dynamic.Router, service internal.Service, routerName string) {
+	prefix := fmt.Sprintf("traefik.http.routers.%s", routerName)
+	
+	// Handle EntryPoints
+	if entrypoints, exists := service.Config[prefix+".entrypoints"]; exists {
+		// Backward compatibility with singular form
+		router.EntryPoints = strings.Split(entrypoints, ",")
+	} else if entrypoint, exists := service.Config[prefix+".entrypoint"]; exists {
+		router.EntryPoints = []string{entrypoint}
+	}
+	
+	// Handle Middlewares
+	if middlewares, exists := service.Config[prefix+".middlewares"]; exists {
+		router.Middlewares = strings.Split(middlewares, ",")
+	}
+	
+	// Handle Priority
+	if priority, exists := service.Config[prefix+".priority"]; exists {
+		if p, err := stringToInt(priority); err == nil {
+			router.Priority = p
+		}
+	}
+	
+	// Handle TLS
+	tls := handleRouterTLS(service, prefix)
+	if tls != nil {
+		router.TLS = tls
+	}
+}
+
+// Apply service configuration options from labels
+func applyServiceOptions(lb *dynamic.ServersLoadBalancer, service internal.Service, serviceName string) {
+	prefix := fmt.Sprintf("traefik.http.services.%s.loadbalancer", serviceName)
+	
+	// Handle PassHostHeader
+	if passHostHeader, exists := service.Config[prefix+".passhostheader"]; exists {
+		if val, err := stringToBool(passHostHeader); err == nil {
+			lb.PassHostHeader = &val
+		}
+	}
+	
+	// Handle HealthCheck
+	if healthcheckPath, exists := service.Config[prefix+".healthcheck.path"]; exists {
+		hc := &dynamic.ServerHealthCheck{
+			Path: healthcheckPath,
+		}
+		
+		if interval, exists := service.Config[prefix+".healthcheck.interval"]; exists {
+			hc.Interval = interval
+		}
+		
+		if timeout, exists := service.Config[prefix+".healthcheck.timeout"]; exists {
+			hc.Timeout = timeout
+		}
+		
+		lb.HealthCheck = hc
+	}
+	
+	// Handle Sticky Sessions
+	if cookieName, exists := service.Config[prefix+".sticky.cookie.name"]; exists {
+		sticky := &dynamic.Sticky{
+			Cookie: &dynamic.Cookie{
+				Name: cookieName,
+			},
+		}
+		
+		if secure, exists := service.Config[prefix+".sticky.cookie.secure"]; exists {
+			if val, err := stringToBool(secure); err == nil {
+				sticky.Cookie.Secure = val
+			}
+		}
+		
+		if httpOnly, exists := service.Config[prefix+".sticky.cookie.httponly"]; exists {
+			if val, err := stringToBool(httpOnly); err == nil {
+				sticky.Cookie.HTTPOnly = val
+			}
+		}
+		
+		lb.Sticky = sticky
+	}
+	
+	// Handle ResponseForwarding
+	if flushInterval, exists := service.Config[prefix+".responseforwarding.flushinterval"]; exists {
+		lb.ResponseForwarding = &dynamic.ResponseForwarding{
+			FlushInterval: flushInterval,
+		}
+	}
+}
+
+// Handle TLS configuration
+func handleRouterTLS(service internal.Service, prefix string) *dynamic.RouterTLSConfig {
+	// Check if TLS is enabled
+	tlsEnabled := false
+	if tlsLabel, exists := service.Config[prefix+".tls"]; exists {
+		if tlsLabel == "true" {
+			tlsEnabled = true
+		}
+	}
+	
+	// If specific TLS settings exist, TLS is implicitly enabled
+	certResolver, hasCertResolver := service.Config[prefix+".tls.certresolver"]
+	domains, hasDomains := service.Config[prefix+".tls.domains"]
+	options, hasOptions := service.Config[prefix+".tls.options"]
+	
+	if !tlsEnabled && !hasCertResolver && !hasDomains && !hasOptions {
+		return nil
+	}
+	
+	// Create TLS config
+	tlsConfig := &dynamic.RouterTLSConfig{}
+	
+	// Add cert resolver if specified
+	if hasCertResolver {
+		tlsConfig.CertResolver = certResolver
+	}
+	
+	// Add options if specified
+	if hasOptions {
+		tlsConfig.Options = options
+	}
+	
+	// Add domains if specified
+	if hasDomains {
+		// Split domains by comma
+		domainList := strings.Split(domains, ",")
+		for _, domain := range domainList {
+			// Create a domain config with Main domain set
+			domainConfig := types.Domain{
+				Main: domain,
+			}
+			tlsConfig.Domains = append(tlsConfig.Domains, domainConfig)
+		}
+	}
+	
+	return tlsConfig
+}
+
 // Helper to get service URL with correct port
 func getServiceURL(service internal.Service, serviceName string, nodeName string) string {
-	port := "80" // Default port
+	// Default protocol and port
+	protocol := "http"
+	port := "80"
+	
+	// Check for HTTPS protocol setting
+	httpsLabel := fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.scheme", serviceName)
+	if scheme, exists := service.Config[httpsLabel]; exists && scheme == "https" {
+		protocol = "https"
+		// Update default port for HTTPS
+		port = "443"
+	}
 	
 	// Look for service-specific port
 	portLabel := fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", serviceName)
@@ -398,13 +562,13 @@ func getServiceURL(service internal.Service, serviceName string, nodeName string
 		// Create a list of server URLs from all IPs
 		for _, ip := range service.IPs {
 			if ip.Address != "" {
-				return fmt.Sprintf("http://%s:%s", ip.Address, port)
+				return fmt.Sprintf("%s://%s:%s", protocol, ip.Address, port)
 			}
 		}
 	}
 	
 	// Fall back to hostname
-	url := fmt.Sprintf("http://%s.%s:%s", service.Name, nodeName, port)
+	url := fmt.Sprintf("%s://%s.%s:%s", protocol, service.Name, nodeName, port)
 	log.Printf("No IPs found, using hostname URL %s for service %s (ID: %d)", url, service.Name, service.ID)
 	return url
 }
@@ -421,6 +585,27 @@ func getRouterRule(service internal.Service, routerName string) string {
 	}
 	
 	return rule
+}
+
+// Helper to convert string to int
+func stringToInt(s string) (int, error) {
+	var i int
+	if _, err := fmt.Sscanf(s, "%d", &i); err != nil {
+		return 0, err
+	}
+	return i, nil
+}
+
+// Helper to convert string to bool
+func stringToBool(s string) (bool, error) {
+	switch strings.ToLower(s) {
+	case "true", "1", "yes", "on":
+		return true, nil
+	case "false", "0", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("cannot convert %s to bool", s)
+	}
 }
 
 // Helper to convert map keys to slice
