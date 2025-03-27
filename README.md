@@ -22,7 +22,7 @@ experimental:
   plugins:
     traefik-proxmox-provider:
       moduleName: github.com/NX211/traefik-proxmox-provider
-      version: v0.5.5
+      version: v0.5.6
 ```
 
 2. Configure the provider in your dynamic configuration:
@@ -34,7 +34,7 @@ providers:
     traefik-proxmox-provider:
       pollInterval: "30s"
       apiEndpoint: "https://proxmox.example.com"
-      apiTokenId: "root@pam!traefik"
+      apiTokenId: "root@pam!traefik_prod"
       apiToken: "your-api-token"
       apiLogging: "info"
       apiValidateSSL: "true"
@@ -48,17 +48,31 @@ providers:
 |--------|------|---------|-------------|
 | `pollInterval` | `string` | `"30s"` | How often to poll the Proxmox API for changes |
 | `apiEndpoint` | `string` | - | The URL of your Proxmox VE API |
-| `apiTokenId` | `string` | - | The API token ID (e.g., "root@pam!traefik") |
+| `apiTokenId` | `string` | - | The API token ID (e.g., "root@pam!traefik_prod") |
 | `apiToken` | `string` | - | The API token secret |
 | `apiLogging` | `string` | `"info"` | Log level for API operations ("debug" or "info") |
 | `apiValidateSSL` | `string` | `"true"` | Whether to validate SSL certificates |
 
+## Proxmox API Token Setup
+
+The Traefik Proxmox Provider needs an API token with specific permissions to read VM and container information. Here's how to set up the proper token and permissions:
+
+```bash
+# Create a role for Traefik provider with minimum required permissions
+pveum role add traefik-provider -privs "VM.Audit,VM.Monitor,Sys.Audit,Datastore.Audit"
+
+# Create an API token for your user (replace with your actual username)
+pveum user token add root@pam traefik_prod
+
+# Assign the role to the token for all paths
+pveum acl modify / -token 'root@pam!traefik_prod' -role traefik-provider
+```
+
+Make sure to save the API token value when it's displayed, as it won't be shown again.
+
 ## Usage
 
-1. Create an API token in Proxmox VE:
-   - Go to Datacenter -> Permissions -> API Tokens
-   - Add a new token with appropriate permissions
-   - Copy the token ID and secret
+1. Create an API token in Proxmox VE as described above
 
 2. Configure the provider in your Traefik configuration:
    - Set the `apiEndpoint` to your Proxmox VE server URL
@@ -67,7 +81,7 @@ providers:
 
 3. **Very Important**: Add Traefik labels to your VMs/containers:
    - Edit your VM/container in Proxmox VE
-   - Go to the "Options" tab and edit "Description"
+   - Go to the "Summary" page and edit the "Notes" box by clicking the pencil icon
    - Add one Traefik label per line with the format `traefik.key=value`
    - **At minimum** add `traefik.enable=true` to enable Traefik for this VM/container
 
@@ -75,7 +89,7 @@ providers:
 
 ## VM/Container Labeling
 
-The provider looks for Traefik labels in the VM/container description field. Each line in the description starting with `traefik.` will be treated as a Traefik label.
+The provider looks for Traefik labels in the VM/container notes field. Each line in the Notes field starting with `traefik.` will be treated as a Traefik label.
 
 ### Required Labels
 
@@ -86,7 +100,7 @@ The provider looks for Traefik labels in the VM/container description field. Eac
 - `traefik.http.routers.rule=Host(`myapp.example.com`)` - The router rule for this service
 - `traefik.http.services.port=8080` - The port to route traffic to (defaults to 80)
 
-### Full Example of VM/Container Description
+### Full Example of VM/Container Notes
 
 ```
 My application server
@@ -101,7 +115,7 @@ traefik.http.services.port=8080
 
 1. The provider connects to your Proxmox VE cluster via API
 2. It discovers all running VMs and containers on all nodes
-3. For each VM/container, it reads the description looking for Traefik labels
+3. For each VM/container, it reads the notes field looking for Traefik labels
 4. If `traefik.enable=true` is found, it creates a Traefik router and service
 5. The provider attempts to get IP addresses for the VM/container 
 6. If IPs are found, they're used as server URLs; otherwise, the VM/container hostname is used
@@ -117,7 +131,7 @@ providers:
     traefik-proxmox-provider:
       pollInterval: "30s"
       apiEndpoint: "https://proxmox.example.com"
-      apiTokenId: "root@pam!traefik"
+      apiTokenId: "root@pam!traefik_prod"
       apiToken: "your-api-token"
       apiLogging: "debug"  # Use debug for troubleshooting
       apiValidateSSL: "true"
@@ -155,7 +169,7 @@ traefik.http.routers.rule=Host(`example.com`) && PathPrefix(`/api`)
 If your services aren't being discovered:
 
 1. Enable debug logging by setting `apiLogging: "debug"`
-2. Check that VMs/containers have `traefik.enable=true` in their description
+2. Check that VMs/containers have `traefik.enable=true` in their notes field
 3. Verify that VMs/containers are in the "running" state
 4. Check that the provider can successfully connect to your Proxmox API
 5. Verify the API token has sufficient permissions

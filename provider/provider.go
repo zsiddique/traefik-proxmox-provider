@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/NX211/traefik-proxmox-provider/internal"
@@ -131,7 +132,7 @@ func (p *Provider) updateConfiguration(ctx context.Context, cfgChan chan<- json.
 		return fmt.Errorf("error getting service map: %w", err)
 	}
 
-	configuration := generateConfiguration(time.Now(), servicesMap)
+	configuration := generateConfiguration(servicesMap)
 	cfgChan <- &dynamic.JSONPayload{Configuration: configuration}
 	return nil
 }
@@ -271,8 +272,8 @@ func scanServices(client *internal.ProxmoxClient, ctx context.Context, nodeName 
 	return services, nil
 }
 
-func generateConfiguration(date time.Time, servicesMap map[string][]internal.Service) *dynamic.Configuration {
-	configuration := &dynamic.Configuration{
+func generateConfiguration(servicesMap map[string][]internal.Service) *dynamic.Configuration {
+	config := &dynamic.Configuration{
 		HTTP: &dynamic.HTTPConfiguration{
 			Routers:           make(map[string]*dynamic.Router),
 			Middlewares:       make(map[string]*dynamic.Middleware),
@@ -283,13 +284,13 @@ func generateConfiguration(date time.Time, servicesMap map[string][]internal.Ser
 			Routers:  make(map[string]*dynamic.TCPRouter),
 			Services: make(map[string]*dynamic.TCPService),
 		},
-		TLS: &dynamic.TLSConfiguration{
-			Stores:  make(map[string]tls.Store),
-			Options: make(map[string]tls.Options),
-		},
 		UDP: &dynamic.UDPConfiguration{
 			Routers:  make(map[string]*dynamic.UDPRouter),
 			Services: make(map[string]*dynamic.UDPService),
+		},
+		TLS: &dynamic.TLSConfiguration{
+			Stores:  make(map[string]tls.Store),
+			Options: make(map[string]tls.Options),
 		},
 	}
 
@@ -297,74 +298,138 @@ func generateConfiguration(date time.Time, servicesMap map[string][]internal.Ser
 	for nodeName, services := range servicesMap {
 		// Loop through all services in this node
 		for _, service := range services {
-			// Check if traefik.enable is set to true
-			if enable, exists := service.Config["traefik.enable"]; !exists || enable != "true" {
+			// Skip disabled services
+			if len(service.Config) == 0 || !isBoolLabelEnabled(service.Config, "traefik.enable") {
 				log.Printf("Skipping service %s (ID: %d) because traefik.enable is not true", service.Name, service.ID)
 				continue
 			}
-
-			// Service name will be used to identify this service
-			serviceName := fmt.Sprintf("%s-%d", service.Name, service.ID)
 			
-			// Create a default LoadBalancer service
-			lb := &dynamic.ServersLoadBalancer{
-				PassHostHeader: boolPtr(true),
-				Servers:        []dynamic.Server{},
-			}
+			// Extract router and service names from labels
+			routerPrefixMap := make(map[string]bool)
+			servicePrefixMap := make(map[string]bool)
 			
-			// Add server endpoints based on IPs
-			if len(service.IPs) > 0 {
-				log.Printf("Found %d IPs for service %s (ID: %d)", len(service.IPs), service.Name, service.ID)
-				for _, ip := range service.IPs {
-					if ip.Address != "" {
-						// Default to port 80 if not specified
-						port := "80"
-						if customPort, exists := service.Config["traefik.http.services.port"]; exists {
-							port = customPort
-						}
-						url := fmt.Sprintf("http://%s:%s", ip.Address, port)
-						lb.Servers = append(lb.Servers, dynamic.Server{URL: url})
-						log.Printf("Added server URL %s for service %s (ID: %d)", url, service.Name, service.ID)
+			for k := range service.Config {
+				if strings.HasPrefix(k, "traefik.http.routers.") {
+					parts := strings.Split(k, ".")
+					if len(parts) > 3 {
+						routerPrefixMap[parts[3]] = true
 					}
 				}
-			} else {
-				// If no IPs found, try to use VM/container name as hostname
-				port := "80"
-				if customPort, exists := service.Config["traefik.http.services.port"]; exists {
-					port = customPort
+				if strings.HasPrefix(k, "traefik.http.services.") {
+					parts := strings.Split(k, ".")
+					if len(parts) > 3 {
+						servicePrefixMap[parts[3]] = true
+					}
 				}
-				url := fmt.Sprintf("http://%s.%s:%s", service.Name, nodeName, port)
-				lb.Servers = append(lb.Servers, dynamic.Server{URL: url})
-				log.Printf("No IPs found, using hostname URL %s for service %s (ID: %d)", url, service.Name, service.ID)
 			}
 			
-			// Create the service if we have servers
-			if len(lb.Servers) > 0 {
-				configuration.HTTP.Services[serviceName] = &dynamic.Service{
-					LoadBalancer: lb,
+			// Default to service ID if no names found
+			defaultID := fmt.Sprintf("%s-%d", service.Name, service.ID)
+			
+			// Convert maps to slices
+			routerNames := mapKeysToSlice(routerPrefixMap)
+			serviceNames := mapKeysToSlice(servicePrefixMap)
+			
+			// Use defaults if no names found
+			if len(routerNames) == 0 {
+				routerNames = []string{defaultID}
+			}
+			if len(serviceNames) == 0 {
+				serviceNames = []string{defaultID}
+			}
+			
+			// Create services
+			for _, serviceName := range serviceNames {
+				serverURL := getServiceURL(service, serviceName, nodeName)
+				config.HTTP.Services[serviceName] = &dynamic.Service{
+					LoadBalancer: &dynamic.ServersLoadBalancer{
+						PassHostHeader: boolPtr(true),
+						Servers: []dynamic.Server{
+							{URL: serverURL},
+						},
+					},
+				}
+			}
+			
+			// Create routers
+			for _, routerName := range routerNames {
+				rule := getRouterRule(service, routerName)
+				
+				// Find target service (prefer explicit mapping)
+				targetService := serviceNames[0]
+				serviceLabel := fmt.Sprintf("traefik.http.routers.%s.service", routerName)
+				if val, exists := service.Config[serviceLabel]; exists {
+					targetService = val
 				}
 				
-				// Default router rule
-				routerRule := fmt.Sprintf("Host(`%s`)", service.Name)
-				
-				// Check for custom router rule
-				if customRule, exists := service.Config["traefik.http.routers.rule"]; exists {
-					routerRule = customRule
-				}
-				
-				// Create the router
-				configuration.HTTP.Routers[serviceName] = &dynamic.Router{
-					Service:  serviceName,
-					Rule:     routerRule,
+				config.HTTP.Routers[routerName] = &dynamic.Router{
+					Service:  targetService,
+					Rule:     rule,
 					Priority: 1,
 				}
-				
-				log.Printf("Created router and service for %s (ID: %d) with rule %s", service.Name, service.ID, routerRule)
+			}
+			
+			log.Printf("Created router and service for %s (ID: %d) with rule %s", 
+				service.Name, service.ID, config.HTTP.Routers[routerNames[0]].Rule)
+		}
+	}
+	
+	return config
+}
+
+// Helper to get service URL with correct port
+func getServiceURL(service internal.Service, serviceName string, nodeName string) string {
+	port := "80" // Default port
+	
+	// Look for service-specific port
+	portLabel := fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", serviceName)
+	if val, exists := service.Config[portLabel]; exists {
+		port = val
+	}
+	
+	// Check for direct URL override
+	urlLabel := fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.url", serviceName)
+	if url, exists := service.Config[urlLabel]; exists {
+		return url
+	}
+	
+	// Use IP if available, otherwise fall back to hostname
+	if len(service.IPs) > 0 {
+		// Create a list of server URLs from all IPs
+		for _, ip := range service.IPs {
+			if ip.Address != "" {
+				return fmt.Sprintf("http://%s:%s", ip.Address, port)
 			}
 		}
 	}
+	
+	// Fall back to hostname
+	url := fmt.Sprintf("http://%s.%s:%s", service.Name, nodeName, port)
+	log.Printf("No IPs found, using hostname URL %s for service %s (ID: %d)", url, service.Name, service.ID)
+	return url
+}
 
-	return configuration
+// Helper to get router rule
+func getRouterRule(service internal.Service, routerName string) string {
+	// Default rule
+	rule := fmt.Sprintf("Host(`%s`)", service.Name)
+	
+	// Look for router-specific rule
+	ruleLabel := fmt.Sprintf("traefik.http.routers.%s.rule", routerName)
+	if val, exists := service.Config[ruleLabel]; exists {
+		rule = val
+	}
+	
+	return rule
+}
+
+// Helper to convert map keys to slice
+func mapKeysToSlice(m map[string]bool) []string {
+	result := make([]string, 0, len(m))
+	for k := range m {
+		result = append(result, k)
+	}
+	return result
 }
 
 func boolPtr(v bool) *bool {
@@ -394,4 +459,9 @@ func validateConfig(config *Config) error {
 	}
 
 	return nil
+}
+
+func isBoolLabelEnabled(labels map[string]string, label string) bool {
+	val, exists := labels[label]
+	return exists && val == "true"
 }

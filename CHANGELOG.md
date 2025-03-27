@@ -1,5 +1,25 @@
 # Changelog
 
+## [v0.6.0] - 2024-03-27
+
+### Added
+
+- Respect for original router and service names in labels
+- Improved port and URL detection for services
+- Support for direct URL overrides via `loadbalancer.server.url` labels
+- Better error handling and feedback when IPs can't be found
+
+### Fixed
+
+- Container labels with router/service names like `grafana` are now properly respected
+- Port settings for named services are correctly applied
+- Better handling for linking routers to the right services
+
+### Changed
+
+- Service discovery now prioritizes explicitly named routers and services
+- Default naming (container-id based) only used as fallback when no explicit names found
+
 ## [v0.5.0] - 2024-03-27
 
 ### Added
