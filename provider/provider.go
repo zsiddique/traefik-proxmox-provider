@@ -533,6 +533,12 @@ func handleRouterTLS(service internal.Service, prefix string) *dynamic.RouterTLS
 
 // Helper to get service URL with correct port
 func getServiceURL(service internal.Service, serviceName string, nodeName string) string {
+	// Check for direct URL override
+	urlLabel := fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.url", serviceName)
+	if url, exists := service.Config[urlLabel]; exists {
+		return url
+	}
+
 	// Default protocol and port
 	protocol := "http"
 	port := "80"
@@ -550,11 +556,11 @@ func getServiceURL(service internal.Service, serviceName string, nodeName string
 	if val, exists := service.Config[portLabel]; exists {
 		port = val
 	}
-	
-	// Check for direct URL override
-	urlLabel := fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.url", serviceName)
-	if url, exists := service.Config[urlLabel]; exists {
-		return url
+
+	// Look for service-specific ip
+	ipLabel := fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.ip", serviceName)
+	if val, exists := service.Config[ipLabel]; exists {
+		return fmt.Sprintf("%s://%s:%s", protocol, val, port)
 	}
 	
 	// Use IP if available, otherwise fall back to hostname
