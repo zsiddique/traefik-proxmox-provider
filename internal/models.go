@@ -58,26 +58,21 @@ func NewService(id uint64, name string, config map[string]string) Service {
 }
 
 func (pc *ParsedConfig) GetTraefikMap() map[string]string {
+	const separator = "="
+
 	m := make(map[string]string)
 	lines := strings.Split(pc.Description, "\n")
-	for _, l := range lines {
-		var k, v string
-		if strings.Contains(l, ":") {
-			parts := strings.SplitN(l, ":", 2)
-			if len(parts) > 1 {
-				k = strings.Replace(parts[0], "\"", "", -1)
-				v = strings.Replace(parts[1], "\"", "", -1)
-			}
-		} else if strings.Contains(l, "=") {
-			parts := strings.SplitN(l, "=", 2)
-			if len(parts) > 1 {
-				k = strings.Replace(parts[0], "\"", "", -1)
-				v = strings.Replace(parts[1], "\"", "", -1)
-			}
+	for _, line := range lines {
+		key, value, found := strings.Cut(line, separator)
+		if !found {
+			continue
 		}
-		
-		if k != "" && strings.HasPrefix(k, "traefik") {
-			m[strings.TrimSpace(k)] = strings.TrimSpace(v)
+
+		key = strings.Trim(key, "\" ")
+		value = strings.Trim(value, "\" ")
+
+		if strings.HasPrefix(key, "traefik.") {
+			m[key] = value
 		}
 	}
 	return m
