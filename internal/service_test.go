@@ -84,7 +84,7 @@ func TestService_IPs(t *testing.T) {
 
 func TestParsedConfig_GetTraefikMap(t *testing.T) {
 	pc := ParsedConfig{
-		Description: "traefik.enable: true\ntraefik.http.routers.test.rule: Host(`test.example.com`)",
+		Description: "traefik.enable=true\ntraefik.http.routers.test.rule=Host(`test.example.com`)",
 	}
 	
 	m := pc.GetTraefikMap()
